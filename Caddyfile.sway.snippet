@@ -1,0 +1,6 @@
+# Sway — append this block to the VPS Caddyfile (see DEPLOY.md),
+# then reload Caddy. The app listens on localhost:3100 via docker-compose.
+
+sway.ryahmadn.my.id {
+	reverse_proxy localhost:3100
+}
