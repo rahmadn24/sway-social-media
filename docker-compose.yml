@@ -1,6 +1,8 @@
 # Sway on the VPS: https://sway.ryahmadn.my.id
 # First-time setup and every later step are in DEPLOY.md.
 # Data survives rebuilds: workspace JSON in ./data, uploads in ./public/uploads.
+# Caddy reaches Sway as sway:3000 on the shared vps-setup_default network
+# (Caddy runs in Docker too, so localhost:3100 would point at Caddy itself).
 
 services:
   sway:
@@ -21,3 +23,9 @@ services:
     volumes:
       - ./data:/app/data
       - ./public/uploads:/app/public/uploads
+    networks:
+      - vps-setup_default
+
+networks:
+  vps-setup_default:
+    external: true
