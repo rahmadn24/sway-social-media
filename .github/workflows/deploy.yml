@@ -1,0 +1,30 @@
+# Auto-deploy Sway to the VPS on every push to the `production` branch.
+# Needs 4 repo secrets (see DEPLOY.md): VPS_HOST, VPS_USER, VPS_PORT,
+# VPS_SSH_KEY (private key whose public key is in the VPS authorized_keys).
+# First-time VPS setup (clone, .env, Caddy) is manual, once — this workflow
+# only pulls, rebuilds and health-checks from the second deploy on.
+
+name: Deploy Sway to VPS
+
+on:
+  push:
+    branches: [production]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          port: ${{ secrets.VPS_PORT }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/ryahmadn/sway
+            git pull --ff-only origin production
+            docker compose up -d --build
+            sleep 5
+            curl -fsS -o /dev/null http://localhost:3100/ && echo "Sway is up on :3100"
