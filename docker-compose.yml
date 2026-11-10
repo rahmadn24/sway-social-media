@@ -1,0 +1,23 @@
+# Sway on the VPS: https://sway.ryahmadn.my.id
+# First-time setup and every later step are in DEPLOY.md.
+# Data survives rebuilds: workspace JSON in ./data, uploads in ./public/uploads.
+
+services:
+  sway:
+    build: .
+    container_name: sway
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    # .env is optional: without it Sway runs with the labeled demo writer.
+    # With AI_PROVIDER + a key it uses the real provider (see DEPLOY.md).
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SOCIAL_PUBLISHING_MODE=${SOCIAL_PUBLISHING_MODE:-sandbox}
+    volumes:
+      - ./data:/app/data
+      - ./public/uploads:/app/public/uploads
