@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUser } from '@/lib/session';
 import { platformsForAccountIds, resolveAccountIds } from '@/lib/accounts';
-import { readDb, writeDb } from '@/lib/store';
+import { getAccounts, getPostById, savePost } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import type { MediaAsset, Post, PostStatus } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -20,17 +22,26 @@ function parseMedia(value: unknown): MediaAsset[] {
     .filter((entry) => entry.url);
 }
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const post = readDb().posts.find((candidate) => candidate.id === id);
+  const post = await getPostById(id);
   if (!post) return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
   return NextResponse.json({ post });
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const db = readDb();
-  const post = db.posts.find((candidate) => candidate.id === id);
+  const post = await getPostById(id);
   if (!post) return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
 
   let body: Record<string, unknown>;
@@ -40,10 +51,11 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
+  const accounts = await getAccounts();
   if (typeof body.caption === 'string') post.caption = body.caption.trim();
   if (typeof body.title === 'string') post.title = body.title.trim();
   if (Array.isArray(body.accountIds) || Array.isArray(body.platforms)) {
-    const accountIds = resolveAccountIds(db.accounts, {
+    const accountIds = resolveAccountIds(accounts, {
       accountIds: Array.isArray(body.accountIds) ? body.accountIds : undefined,
       platforms: Array.isArray(body.platforms) ? body.platforms : undefined,
     });
@@ -54,7 +66,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       );
     }
     post.accountIds = accountIds;
-    post.platforms = platformsForAccountIds(db.accounts, accountIds);
+    post.platforms = platformsForAccountIds(accounts, accountIds);
   }
   if (Array.isArray(body.media)) post.media = parseMedia(body.media);
   if (Array.isArray(body.tags)) {
@@ -90,7 +102,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (post.status !== 'draft' && post.accountIds.length === 0) {
     return NextResponse.json({ error: 'Choose at least one account.' }, { status: 400 });
   }
-  const disconnected = db.accounts.filter(
+  const disconnected = accounts.filter(
     (account) => post.accountIds.includes(account.id) && !account.connected,
   );
   if (post.status !== 'draft' && disconnected.length > 0) {
@@ -119,16 +131,19 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (post.status === 'draft') post.scheduledAt = undefined;
 
   post.updatedAt = new Date().toISOString();
-  writeDb(db);
-  return NextResponse.json({ post });
+  const saved = await savePost(post);
+  return NextResponse.json({ post: saved });
 }
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const db = readDb();
-  const index = db.posts.findIndex((candidate) => candidate.id === id);
-  if (index === -1) return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
-  db.posts.splice(index, 1);
-  writeDb(db);
+  const existing = await prisma.post.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) return NextResponse.json({ error: 'Post not found.' }, { status: 404 });
+  await prisma.post.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

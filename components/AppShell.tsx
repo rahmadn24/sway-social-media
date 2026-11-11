@@ -14,9 +14,11 @@ import {
   Inbox,
   LayoutDashboard,
   LibraryBig,
+  LogOut,
   Menu,
   MessageCircle,
   Plus,
+  RotateCcw,
   Search,
   Sparkles,
   SquarePen,
@@ -65,6 +67,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [notificationCount, setNotificationCount] = useState(0);
+  const [user, setUser] = useState<{ email: string; role: string } | null>(null);
+  const [resetting, setResetting] = useState(false);
   const notificationButton = useRef<HTMLButtonElement>(null);
   const notificationPanel = useRef<HTMLDivElement>(null);
 
@@ -91,10 +95,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    try {
+      const data = await apiRequest<{ user: { email: string; role: string } }>('/api/auth/me');
+      setUser(data.user);
+    } catch {
+      setUser(null);
+    }
+  }, []);
+
+  const isLogin = pathname === '/login';
+
   useEffect(() => {
+    if (isLogin) return;
     void refreshCounts();
     void refreshNotificationFeed();
-  }, [pathname, refreshCounts, refreshNotificationFeed]);
+    void refreshUser();
+  }, [pathname, isLogin, refreshCounts, refreshNotificationFeed, refreshUser]);
 
   useEffect(() => {
     const onCounts = () => void refreshCounts();
@@ -109,11 +126,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // The scheduler publishes in the background, so poll while the tab is open.
   useEffect(() => {
+    if (isLogin) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') void refreshNotificationFeed();
     }, 30_000);
     return () => clearInterval(interval);
-  }, [refreshNotificationFeed]);
+  }, [refreshNotificationFeed, isLogin]);
 
   useEffect(() => {
     setMobileOpen(false);
@@ -171,7 +189,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function handleLogout() {
+    try {
+      await apiRequest('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // The cookie is cleared server-side; navigate even if the call fails.
+    }
+    router.push('/login');
+    router.refresh();
+  }
+
+  async function handleReset() {
+    if (resetting) return;
+    const confirmed = window.confirm(
+      'Reset the demo workspace? All posts, conversations and analytics return to the fresh demo data. The connected AI provider key is kept.',
+    );
+    if (!confirmed) return;
+    setResetting(true);
+    try {
+      await apiRequest('/api/auth/reset', { method: 'POST' });
+      window.location.reload();
+    } catch {
+      setResetting(false);
+    }
+  }
+
   const pageTitle = PAGE_TITLES[pathname] ?? 'Sway';
+
+  // The login page stands alone, without the sidebar and top bar.
+  if (isLogin) return <>{children}</>;
 
   return (
     <div className="app-shell">
@@ -245,14 +291,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </Link>
         </div>
 
-        <Link href="/connections" className="sidebar-user">
-          <Avatar name="Maya Chen" src="/avatars/maya.jpg" size={34} />
-          <span className="sidebar-user-copy">
-            <strong>Maya Chen</strong>
-            <span>Maya Studio</span>
-          </span>
-          <ChevronRight size={16} />
-        </Link>
+        <div className="sidebar-account">
+          <div className="sidebar-account-user">
+            <Avatar name={user?.email ?? 'Sway'} size={34} />
+            <span className="sidebar-user-copy">
+              <strong>{user?.email ?? 'Signed in'}</strong>
+              <span>{user?.role === 'admin' ? 'Admin' : 'Demo account'}</span>
+            </span>
+          </div>
+          <div className="sidebar-account-actions">
+            <button type="button" onClick={() => void handleReset()} disabled={resetting}>
+              <RotateCcw size={13} />
+              {resetting ? 'Resetting…' : 'Reset demo data'}
+            </button>
+            <button type="button" onClick={() => void handleLogout()}>
+              <LogOut size={13} />
+              Log out
+            </button>
+          </div>
+        </div>
       </aside>
 
       <div className="app-body">
@@ -338,7 +395,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </div>
             <Link href="/connections" className="topbar-profile" aria-label="Open account settings">
-              <Avatar name="Maya Chen" src="/avatars/maya.jpg" size={34} />
+              <Avatar name={user?.email ?? 'Sway'} size={34} />
             </Link>
           </div>
         </header>

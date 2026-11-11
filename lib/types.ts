@@ -107,22 +107,6 @@ export interface AnalyticsPoint {
   followers: number;
 }
 
-export interface Database {
-  version: number;
-  user: {
-    name: string;
-    email: string;
-    avatar: string;
-    role: string;
-    timezone: string;
-  };
-  accounts: Account[];
-  posts: Post[];
-  conversations: Conversation[];
-  notifications: AppNotification[];
-  analytics: AnalyticsPoint[];
-}
-
 export interface OverviewMetrics {
   reach: number;
   reachChange: number;

@@ -4,7 +4,6 @@ import type {
   AnalyticsPoint,
   AppNotification,
   Conversation,
-  Database,
   MediaAsset,
   Platform,
   Post,
@@ -712,22 +711,14 @@ function seededAnalytics(): AnalyticsPoint[] {
   return points;
 }
 
-export function createSeedDatabase(): Database {
-  return {
-    version: 1,
-    user: {
-      name: 'Maya Chen',
-      email: 'maya@mayastudio.co',
-      avatar: '/avatars/maya.jpg',
-      role: 'Founder & creator',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Jakarta',
-    },
-    accounts,
-    posts,
-    conversations,
-    notifications,
-    analytics: seededAnalytics(),
-  };
-}
+// Demo workspace content, seeded into Postgres by prisma/seed.ts (and by
+// POST /api/auth/reset). IDs are stable strings, so every re-seed produces
+// the same workspace. The old workspace profile (Maya Chen) is not rendered
+// anywhere in the UI, so it is not stored.
+export const seedAccounts = accounts;
+export const seedPosts = posts;
+export const seedConversations = conversations;
+export const seedNotifications = notifications;
+export { seededAnalytics };
 
 export type SeedPlatform = Platform;

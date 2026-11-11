@@ -1,4 +1,4 @@
-import { readDb } from './store';
+import { getAccounts, getAnalytics, getConversations, getPosts } from './db';
 import type { AnalyticsPoint, OverviewData } from './types';
 
 export const OVERVIEW_RANGES = ['7d', '30d', '90d'] as const;
@@ -17,25 +17,30 @@ function sum(points: AnalyticsPoint[], key: 'reach' | 'engagement'): number {
   return points.reduce((total, point) => total + point[key], 0);
 }
 
-export function buildOverview(range: OverviewRange = '30d'): OverviewData {
-  const db = readDb();
+export async function buildOverview(range: OverviewRange = '30d'): Promise<OverviewData> {
+  const [accounts, analytics, conversations, posts] = await Promise.all([
+    getAccounts(),
+    getAnalytics(),
+    getConversations(),
+    getPosts(),
+  ]);
   const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
-  const recent = db.analytics.slice(-days);
-  const previous = db.analytics.slice(-(days * 2), -days);
+  const recent = analytics.slice(-days);
+  const previous = analytics.slice(-(days * 2), -days);
   const reach = sum(recent, 'reach');
   const engagement = sum(recent, 'engagement');
   const previousReach = sum(previous, 'reach');
   const previousEngagement = sum(previous, 'engagement');
 
-  const followers = db.accounts.reduce((total, account) => total + account.followers, 0);
-  const followerWeight = db.accounts.reduce(
+  const followers = accounts.reduce((total, account) => total + account.followers, 0);
+  const followerWeight = accounts.reduce(
     (total, account) => total + account.followers * account.followerChange,
     0,
   );
   const followerChange = Number((followerWeight / followers).toFixed(1));
   const engagementRate = Number(((engagement / reach) * 100).toFixed(1));
   const now = Date.now();
-  const scheduled = db.posts.filter((post) => post.status === 'scheduled');
+  const scheduled = posts.filter((post) => post.status === 'scheduled');
   const upcoming = scheduled
     .filter((post) => !post.scheduledAt || new Date(post.scheduledAt).getTime() >= now)
     .sort((a, b) => (a.scheduledAt ?? '').localeCompare(b.scheduledAt ?? ''))
@@ -53,13 +58,13 @@ export function buildOverview(range: OverviewRange = '30d'): OverviewData {
     },
     chart: recent,
     scheduledCount: scheduled.length,
-    unreadCount: db.conversations.filter((conversation) => conversation.unread).length,
-    accounts: db.accounts,
+    unreadCount: conversations.filter((conversation) => conversation.unread).length,
+    accounts,
     upcoming,
-    inbox: [...db.conversations]
+    inbox: [...conversations]
       .sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt))
       .slice(0, 4),
-    topPosts: db.posts
+    topPosts: posts
       .filter((post) => post.status === 'published')
       .sort((a, b) => b.metrics.impressions - a.metrics.impressions)
       .slice(0, 3),

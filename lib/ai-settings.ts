@@ -1,5 +1,5 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import { decryptApiKey, encryptApiKey } from './crypto';
+import { prisma } from './prisma';
 import {
   AI_PROVIDERS,
   AI_PROVIDER_LIST,
@@ -10,9 +10,15 @@ import {
 } from './ai-providers';
 import type { AiProviderId, AiProviderStatus, AiStatus } from './types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
-const SETTINGS_FILE = path.join(DATA_DIR, 'ai.json');
-const LEGACY_CLAUDE_FILE = path.join(DATA_DIR, 'claude.json');
+// AI provider settings, per signed-in user, stored in Postgres.
+// Provider keys are AES-256-GCM encrypted at rest (lib/crypto.ts) and are
+// NEVER returned by any API response — only a masked preview is exposed.
+//
+// Resolution order for a key (unchanged from before):
+//   1. environment variable for that provider (env-managed, UI cannot override)
+//   2. the signed-in user's encrypted key in the database
+// The active provider is per user, unless AI_PROVIDER is set in the
+// environment (providerLocked).
 
 interface StoredProviderSettings {
   apiKey?: string;
@@ -22,9 +28,8 @@ interface StoredProviderSettings {
 }
 
 interface StoredAiSettings {
-  version?: number;
-  activeProvider?: AiProviderId;
-  providers?: Partial<Record<AiProviderId, StoredProviderSettings>>;
+  activeProvider: AiProviderId;
+  providers: Partial<Record<AiProviderId, StoredProviderSettings>>;
 }
 
 export interface ResolvedAiConfig {
@@ -38,69 +43,32 @@ export interface ResolvedAiConfig {
   envManaged: boolean;
 }
 
-function ensureDataDir(): void {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function readLegacyClaude(): StoredProviderSettings | null {
-  try {
-    if (!fs.existsSync(LEGACY_CLAUDE_FILE)) return null;
-    const parsed = JSON.parse(fs.readFileSync(LEGACY_CLAUDE_FILE, 'utf8')) as {
-      apiKey?: string;
-      model?: string;
-    };
-    if (!parsed.apiKey && !parsed.model) return null;
-    return { apiKey: parsed.apiKey, model: parsed.model };
-  } catch {
-    return null;
-  }
-}
-
-function readSettings(): StoredAiSettings {
-  try {
-    if (fs.existsSync(SETTINGS_FILE)) {
-      const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) as StoredAiSettings;
-      return {
-        version: parsed.version ?? 1,
-        activeProvider: isAiProvider(parsed.activeProvider)
-          ? parsed.activeProvider
-          : DEFAULT_AI_PROVIDER,
-        providers: parsed.providers ?? {},
+async function readUserSettings(userId: string): Promise<StoredAiSettings> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { aiSettings: true },
+  });
+  const providers: StoredAiSettings['providers'] = {};
+  if (user) {
+    for (const row of user.aiSettings) {
+      if (!isAiProvider(row.provider)) continue;
+      providers[row.provider] = {
+        apiKey: row.encryptedApiKey
+          ? (decryptApiKey(row.encryptedApiKey) ?? undefined)
+          : undefined,
+        model: row.model ?? undefined,
+        baseUrl: row.baseUrl ?? undefined,
+        connectedAt: row.connectedAt?.toISOString(),
       };
     }
-  } catch {
-    // Fall through to legacy migration / empty settings.
   }
-
-  const legacy = readLegacyClaude();
-  if (legacy) {
-    const migrated: StoredAiSettings = {
-      version: 1,
-      activeProvider: 'anthropic',
-      providers: { anthropic: legacy },
-    };
-    writeSettings(migrated);
-    // The plaintext key now lives in ai.json — remove the legacy file so no
-    // stale credential is left on disk after a disconnect/reset.
-    try {
-      fs.unlinkSync(LEGACY_CLAUDE_FILE);
-    } catch {
-      // Best effort; migration already succeeded.
-    }
-    return migrated;
-  }
-
-  return { version: 1, activeProvider: DEFAULT_AI_PROVIDER, providers: {} };
-}
-
-function writeSettings(settings: StoredAiSettings): void {
-  ensureDataDir();
-  const temporary = `${SETTINGS_FILE}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(settings, null, 2), {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
-  fs.renameSync(temporary, SETTINGS_FILE);
+  return {
+    activeProvider:
+      user && isAiProvider(user.activeAiProvider)
+        ? user.activeAiProvider
+        : DEFAULT_AI_PROVIDER,
+    providers,
+  };
 }
 
 function configuredProvider(settings: StoredAiSettings): AiProviderId {
@@ -179,13 +147,13 @@ function resolveProviderConfig(
   };
 }
 
-export function getActiveAiConfig(): ResolvedAiConfig {
-  const settings = readSettings();
+export async function getActiveAiConfig(userId: string): Promise<ResolvedAiConfig> {
+  const settings = await readUserSettings(userId);
   return resolveProviderConfig(settings, configuredProvider(settings));
 }
 
-export function getAiStatus(): AiStatus {
-  const settings = readSettings();
+export async function getAiStatus(userId: string): Promise<AiStatus> {
+  const settings = await readUserSettings(userId);
   const provider = configuredProvider(settings);
   const active = resolveProviderConfig(settings, provider);
 
@@ -225,57 +193,75 @@ export function maskKey(key: string): string {
 }
 
 export function providerHasEnvKey(provider: AiProviderId): boolean {
-  const settings = readSettings();
-  return Boolean(envApiKey(provider, configuredProvider(settings)));
+  const active = process.env.AI_PROVIDER?.trim();
+  return Boolean(envApiKey(provider, isAiProvider(active) ? active : DEFAULT_AI_PROVIDER));
 }
 
-export function saveAiSettings(input: {
-  provider: AiProviderId;
-  apiKey?: string;
-  model?: string;
-  baseUrl?: string;
-}): AiStatus {
-  const settings = readSettings();
+export async function saveAiSettings(
+  userId: string,
+  input: {
+    provider: AiProviderId;
+    apiKey?: string;
+    model?: string;
+    baseUrl?: string;
+  },
+): Promise<AiStatus> {
   const meta = AI_PROVIDERS[input.provider];
-  const current = settings.providers?.[input.provider] ?? {};
+  const existing = await prisma.aiSetting.findUnique({
+    where: { userId_provider: { userId, provider: input.provider } },
+  });
   const apiKey = input.apiKey?.trim();
 
-  settings.providers = {
-    ...settings.providers,
-    [input.provider]: {
-      ...current,
-      apiKey: apiKey || current.apiKey,
-      model: input.model?.trim() || current.model || meta.defaultModel,
-      baseUrl: normalizeBaseUrl(input.baseUrl ?? current.baseUrl ?? meta.defaultBaseUrl),
-      connectedAt: new Date().toISOString(),
+  await prisma.aiSetting.upsert({
+    where: { userId_provider: { userId, provider: input.provider } },
+    update: {
+      encryptedApiKey: apiKey
+        ? encryptApiKey(apiKey)
+        : (existing?.encryptedApiKey ?? null),
+      model: input.model?.trim() || existing?.model || meta.defaultModel,
+      baseUrl: normalizeBaseUrl(input.baseUrl ?? existing?.baseUrl ?? meta.defaultBaseUrl),
+      connectedAt: new Date(),
     },
-  };
-  settings.activeProvider = input.provider;
-  settings.version = 1;
-  writeSettings(settings);
-  return getAiStatus();
+    create: {
+      userId,
+      provider: input.provider,
+      encryptedApiKey: apiKey ? encryptApiKey(apiKey) : null,
+      model: input.model?.trim() || meta.defaultModel,
+      baseUrl: normalizeBaseUrl(input.baseUrl ?? meta.defaultBaseUrl),
+      connectedAt: new Date(),
+    },
+  });
+
+  // The chosen provider becomes this user's active provider.
+  await prisma.user.update({
+    where: { id: userId },
+    data: { activeAiProvider: input.provider },
+  });
+
+  return getAiStatus(userId);
 }
 
-export function clearAiSettings(provider?: AiProviderId): AiStatus {
-  const settings = readSettings();
+export async function clearAiSettings(
+  userId: string,
+  provider?: AiProviderId,
+): Promise<AiStatus> {
+  const settings = await readUserSettings(userId);
   const target = provider ?? configuredProvider(settings);
-  if (settings.providers?.[target]) {
-    delete settings.providers[target];
-    writeSettings(settings);
-  }
-  return getAiStatus();
+  await prisma.aiSetting.deleteMany({ where: { userId, provider: target } });
+  return getAiStatus(userId);
 }
 
 export async function validateAiProvider(
   provider: AiProviderId,
   input: { apiKey?: string; baseUrl?: string },
+  userId?: string,
 ): Promise<{ ok: boolean; detail?: string }> {
   const meta = AI_PROVIDERS[provider];
-  const settings = readSettings();
+  const settings = userId ? await readUserSettings(userId) : null;
   const key =
     input.apiKey?.trim() ||
-    envApiKey(provider, configuredProvider(settings)) ||
-    settings.providers?.[provider]?.apiKey?.trim();
+    envApiKey(provider, settings ? configuredProvider(settings) : DEFAULT_AI_PROVIDER) ||
+    settings?.providers?.[provider]?.apiKey?.trim();
   const baseUrl = normalizeBaseUrl(input.baseUrl ?? meta.defaultBaseUrl);
 
   if (meta.keyRequired && !key) {

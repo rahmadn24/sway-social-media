@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AiRequestError, generateSocialContent } from '@/lib/ai';
+import { getAuthenticatedUser } from '@/lib/session';
 import { PLATFORMS } from '@/lib/types';
 import type { AiGenerationInput, Platform } from '@/lib/types';
 
@@ -7,6 +8,11 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
@@ -31,7 +37,7 @@ export async function POST(request: NextRequest) {
   };
 
   try {
-    const result = await generateSocialContent(input);
+    const result = await generateSocialContent(input, user.id);
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof AiRequestError) {

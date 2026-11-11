@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUser } from '@/lib/session';
 import type { MediaAsset } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +19,11 @@ const EXTENSIONS: Record<string, string> = {
 };
 
 export async function POST(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let formData: FormData;
   try {
     formData = await request.formData();

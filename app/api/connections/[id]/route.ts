@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUser } from '@/lib/session';
 import { platformsForAccountIds } from '@/lib/accounts';
-import { readDb, writeDb } from '@/lib/store';
+import { getAccounts, serializeAccount } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
   let body: { action?: string };
   try {
@@ -15,49 +22,61 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
-  const db = readDb();
-  const account = db.accounts.find((candidate) => candidate.id === id);
+  const account = await prisma.account.findUnique({ where: { id } });
   if (!account) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
 
-  const now = new Date().toISOString();
+  const now = new Date();
 
   switch (body.action) {
     case 'connect':
-      account.connected = true;
-      account.health = 'healthy';
-      account.lastSyncedAt = now;
+      await prisma.account.update({
+        where: { id },
+        data: { connected: true, health: 'healthy', lastSyncedAt: now },
+      });
       break;
     case 'disconnect':
-      account.connected = false;
-      account.health = 'attention';
+      await prisma.account.update({
+        where: { id },
+        data: { connected: false, health: 'attention' },
+      });
       break;
     case 'refresh':
-      account.connected = true;
-      account.health = 'healthy';
-      account.lastSyncedAt = now;
+      await prisma.account.update({
+        where: { id },
+        data: { connected: true, health: 'healthy', lastSyncedAt: now },
+      });
       break;
     case 'primary':
-      db.accounts.forEach((candidate) => {
-        if (candidate.platform === account.platform) candidate.isPrimary = candidate.id === account.id;
-      });
+      await prisma.$transaction([
+        prisma.account.updateMany({
+          where: { platform: account.platform },
+          data: { isPrimary: false },
+        }),
+        prisma.account.update({ where: { id }, data: { isPrimary: true } }),
+      ]);
       break;
     default:
       return NextResponse.json({ error: 'Unknown connection action.' }, { status: 400 });
   }
 
-  writeDb(db);
-  return NextResponse.json({ account });
+  const updated = await prisma.account.findUniqueOrThrow({ where: { id } });
+  return NextResponse.json({ account: serializeAccount(updated) });
 }
 
-export async function DELETE(_request: NextRequest, context: RouteContext) {
+export async function DELETE(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const db = readDb();
-  const account = db.accounts.find((candidate) => candidate.id === id);
+  const account = await prisma.account.findUnique({ where: { id } });
   if (!account) return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
 
-  const siblings = db.accounts.filter(
-    (candidate) => candidate.platform === account.platform && candidate.id !== account.id,
-  );
+  const siblings = await prisma.account.findMany({
+    where: { platform: account.platform, id: { not: id } },
+    orderBy: { sortOrder: 'asc' },
+  });
   if (siblings.length === 0) {
     return NextResponse.json(
       {
@@ -68,27 +87,59 @@ export async function DELETE(_request: NextRequest, context: RouteContext) {
   }
 
   const replacement = siblings.find((candidate) => candidate.isPrimary) ?? siblings[0];
+  const accounts = await getAccounts();
+  const remaining = accounts.filter((candidate) => candidate.id !== id);
 
-  db.posts.forEach((post) => {
-    if (!post.accountIds.includes(account.id)) return;
-    post.accountIds = [
-      ...new Set(post.accountIds.map((accountId) => (accountId === account.id ? replacement.id : accountId))),
-    ];
-    post.platforms = platformsForAccountIds(db.accounts, post.accountIds);
-    post.updatedAt = new Date().toISOString();
+  await prisma.$transaction(async (tx) => {
+    // Posts: drop the deleted link, then link the replacement (unless the
+    // post already uses it). Platforms are recomputed from the links.
+    const links = await tx.postAccount.findMany({ where: { accountId: id } });
+    for (const link of links) {
+      await tx.postAccount.delete({
+        where: { postId_accountId: { postId: link.postId, accountId: id } },
+      });
+      const alreadyLinked = await tx.postAccount.findUnique({
+        where: {
+          postId_accountId: { postId: link.postId, accountId: replacement.id },
+        },
+      });
+      if (!alreadyLinked) {
+        await tx.postAccount.create({
+          data: { postId: link.postId, accountId: replacement.id },
+        });
+      }
+      const linkedIds = (
+        await tx.postAccount.findMany({
+          where: { postId: link.postId },
+          select: { accountId: true },
+        })
+      ).map((row) => row.accountId);
+      await tx.post.update({
+        where: { id: link.postId },
+        data: {
+          platforms: platformsForAccountIds(remaining, linkedIds),
+          updatedAt: new Date(),
+        },
+      });
+    }
+
+    await tx.conversation.updateMany({
+      where: { accountId: id },
+      data: { accountId: replacement.id },
+    });
+    await tx.appNotification.updateMany({
+      where: { accountId: id },
+      data: { accountId: replacement.id },
+    });
+
+    if (account.isPrimary && !replacement.isPrimary) {
+      await tx.account.update({
+        where: { id: replacement.id },
+        data: { isPrimary: true },
+      });
+    }
+    await tx.account.delete({ where: { id } });
   });
 
-  db.conversations.forEach((conversation) => {
-    if (conversation.accountId === account.id) conversation.accountId = replacement.id;
-  });
-
-  db.notifications.forEach((notification) => {
-    if (notification.accountId === account.id) notification.accountId = replacement.id;
-  });
-
-  if (account.isPrimary && !replacement.isPrimary) replacement.isPrimary = true;
-
-  db.accounts = db.accounts.filter((candidate) => candidate.id !== account.id);
-  writeDb(db);
   return NextResponse.json({ ok: true, reassignedTo: replacement.id });
 }

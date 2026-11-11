@@ -629,8 +629,8 @@ export default function ConnectionsPage() {
               <div>
                 <strong>Keys stay server-side</strong>
                 <p>
-                  AI keys are stored in <code>data/ai.json</code> with local-only file permissions
-                  and never exposed to the browser.
+                  AI keys are stored encrypted in Postgres (per user) and never exposed to the
+                  browser.
                 </p>
               </div>
             </div>

@@ -1,7 +1,10 @@
 # Sway — Social Studio, production image for the VPS.
 # Multi-stage: install deps -> build Next.js (standalone) -> slim runtime.
-# Data lives in /app/data and uploads in /app/public/uploads, both mounted
-# as volumes in docker-compose.yml so a rebuild never wipes the workspace.
+# All structured data lives in Postgres (prisma/schema.prisma); only
+# uploads stay on disk in /app/public/uploads (volume in docker-compose.yml).
+# The entrypoint applies Prisma migrations and seeds before starting the
+# server, so a rebuild never wipes the workspace and auto-deploy can ship
+# schema changes.
 
 # syntax=docker/dockerfile:1
 
@@ -14,6 +17,9 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Generate the Prisma client before the Next.js build bundles it.
+# (No DATABASE_URL is needed for generate.)
+RUN npx prisma generate
 RUN npm run build
 
 FROM node:24-alpine AS runner
@@ -26,8 +32,21 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
-# Writable at runtime even before any volume is mounted.
-RUN mkdir -p /app/data /app/public/uploads
+# The entrypoint runs `prisma migrate deploy` + `prisma db seed` before
+# starting the server, so it needs the Prisma CLI, tsx, the generated
+# client, the schema/migrations, the seed's lib/ imports and the config —
+# i.e. the full node_modules plus prisma/, lib/ and prisma.config.ts.
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/lib ./lib
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder /app/package.json ./package.json
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+# Uploads stay on disk; writable at runtime even before any volume mounts.
+RUN mkdir -p /app/public/uploads
 
 EXPOSE 3000
+ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["node", "server.js"]

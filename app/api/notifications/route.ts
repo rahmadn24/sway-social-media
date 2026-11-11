@@ -1,17 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readDb, writeDb } from '@/lib/store';
+import { getAuthenticatedUser } from '@/lib/session';
+import { getNotifications } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const db = readDb();
+export async function GET(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
+  const notifications = await getNotifications();
   return NextResponse.json({
-    notifications: [...db.notifications].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    unread: db.notifications.filter((notification) => !notification.read).length,
+    notifications,
+    unread: notifications.filter((notification) => !notification.read).length,
   });
 }
 
 export async function PATCH(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let body: { action?: string; id?: string };
   try {
     body = (await request.json()) as { action?: string; id?: string };
@@ -19,18 +31,17 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
-  const db = readDb();
   if (body.action === 'read-all') {
-    db.notifications.forEach((notification) => {
-      notification.read = true;
-    });
+    await prisma.appNotification.updateMany({ data: { read: true } });
   } else if (body.action === 'read' && body.id) {
-    const notification = db.notifications.find((candidate) => candidate.id === body.id);
-    if (notification) notification.read = true;
+    await prisma.appNotification.updateMany({
+      where: { id: body.id },
+      data: { read: true },
+    });
   } else {
     return NextResponse.json({ error: 'Unknown notification action.' }, { status: 400 });
   }
 
-  writeDb(db);
-  return NextResponse.json({ ok: true, unread: db.notifications.filter((item) => !item.read).length });
+  const unread = await prisma.appNotification.count({ where: { read: false } });
+  return NextResponse.json({ ok: true, unread });
 }

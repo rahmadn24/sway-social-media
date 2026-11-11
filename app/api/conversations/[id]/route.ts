@@ -1,22 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { readDb, writeDb } from '@/lib/store';
+import { getAuthenticatedUser } from '@/lib/session';
+import { getConversationById, serializeConversation } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 
 export const dynamic = 'force-dynamic';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const conversation = readDb().conversations.find((candidate) => candidate.id === id);
+  const conversation = await getConversationById(id);
   if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
   return NextResponse.json({ conversation });
 }
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   const { id } = await context.params;
-  const db = readDb();
-  const conversation = db.conversations.find((candidate) => candidate.id === id);
-  if (!conversation) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
+  const existing = await prisma.conversation.findUnique({ where: { id }, select: { id: true } });
+  if (!existing) return NextResponse.json({ error: 'Conversation not found.' }, { status: 404 });
 
   let body: Record<string, unknown>;
   try {
@@ -25,11 +36,16 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
-  if (typeof body.unread === 'boolean') conversation.unread = body.unread;
-  if (typeof body.starred === 'boolean') conversation.starred = body.starred;
+  const data: { unread?: boolean; starred?: boolean; status?: string } = {};
+  if (typeof body.unread === 'boolean') data.unread = body.unread;
+  if (typeof body.starred === 'boolean') data.starred = body.starred;
   if (body.status === 'open' || body.status === 'replied' || body.status === 'resolved') {
-    conversation.status = body.status;
+    data.status = body.status;
   }
-  writeDb(db);
-  return NextResponse.json({ conversation });
+  const updated = await prisma.conversation.update({
+    where: { id },
+    data,
+    include: { messages: true },
+  });
+  return NextResponse.json({ conversation: serializeConversation(updated) });
 }

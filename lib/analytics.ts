@@ -1,7 +1,8 @@
-import { readDb } from './store';
+import { getAccounts, getAnalytics, getPosts } from './db';
 import { parseRange, type OverviewRange } from './overview';
 import { PLATFORMS } from './types';
 import type {
+  Account,
   AccountPerformance,
   AnalyticsData,
   AnalyticsPoint,
@@ -130,7 +131,7 @@ function buildFormats(posts: Post[]): FormatPerformance[] {
 }
 
 function buildAccounts(
-  accounts: ReturnType<typeof readDb>['accounts'],
+  accounts: Account[],
   posts: Post[],
   days: number,
 ): AccountPerformance[] {
@@ -176,7 +177,7 @@ function buildAccounts(
 }
 
 function buildPlatforms(
-  accounts: ReturnType<typeof readDb>['accounts'],
+  accounts: Account[],
   accountRows: AccountPerformance[],
   posts: Post[],
   days: number,
@@ -229,21 +230,25 @@ function buildPlatforms(
   return rows.sort((a, b) => b.reach - a.reach);
 }
 
-export function buildAnalytics(range: OverviewRange = '30d'): AnalyticsData {
-  const db = readDb();
+export async function buildAnalytics(range: OverviewRange = '30d'): Promise<AnalyticsData> {
+  const [accounts, analytics, posts] = await Promise.all([
+    getAccounts(),
+    getAnalytics(),
+    getPosts(),
+  ]);
   const days = range === '7d' ? 7 : range === '90d' ? 90 : 30;
   const now = Date.now();
   const cutoff = now - days * 86_400_000;
 
-  const recent = db.analytics.slice(-days);
-  const previous = db.analytics.slice(-(days * 2), -days);
+  const recent = analytics.slice(-days);
+  const previous = analytics.slice(-(days * 2), -days);
   const reach = recent.reduce((total, point) => total + point.reach, 0);
   const engagement = recent.reduce((total, point) => total + point.engagement, 0);
   const previousReach = previous.reduce((total, point) => total + point.reach, 0);
   const previousEngagement = previous.reduce((total, point) => total + point.engagement, 0);
 
-  const followers = db.accounts.reduce((total, account) => total + account.followers, 0);
-  const followerWeight = db.accounts.reduce(
+  const followers = accounts.reduce((total, account) => total + account.followers, 0);
+  const followerWeight = accounts.reduce(
     (total, account) => total + account.followers * account.followerChange,
     0,
   );
@@ -253,7 +258,7 @@ export function buildAnalytics(range: OverviewRange = '30d'): AnalyticsData {
   const netFollowers =
     recent.length > 1 ? Math.max(0, recent[recent.length - 1].followers - recent[0].followers) : 0;
 
-  const publishedInRange = db.posts.filter(
+  const publishedInRange = posts.filter(
     (post) => post.status === 'published' && within(post.publishedAt, cutoff),
   );
   const publishedCount = publishedInRange.length;
@@ -264,7 +269,7 @@ export function buildAnalytics(range: OverviewRange = '30d'): AnalyticsData {
       )
     : 0;
 
-  const topPosts = [...(publishedInRange.length ? publishedInRange : db.posts.filter((post) => post.status === 'published'))]
+  const topPosts = [...(publishedInRange.length ? publishedInRange : posts.filter((post) => post.status === 'published'))]
     .sort((a, b) => {
       const scoreA = engagementOf(a) + a.metrics.impressions * 0.02;
       const scoreB = engagementOf(b) + b.metrics.impressions * 0.02;
@@ -273,7 +278,7 @@ export function buildAnalytics(range: OverviewRange = '30d'): AnalyticsData {
     .slice(0, 5);
 
   const { heatmap, bestDay, bestHour } = buildHeatmap();
-  const accounts = buildAccounts(db.accounts, db.posts, days);
+  const accountRows = buildAccounts(accounts, posts, days);
 
   return {
     range,
@@ -290,13 +295,13 @@ export function buildAnalytics(range: OverviewRange = '30d'): AnalyticsData {
       netFollowers,
     },
     chart: recent as AnalyticsPoint[],
-    platforms: buildPlatforms(db.accounts, accounts, db.posts, days),
-    accounts,
+    platforms: buildPlatforms(accounts, accountRows, posts, days),
+    accounts: accountRows,
     audience: audienceFor(days),
     topPosts,
     heatmap,
     bestDay,
     bestHour,
-    formats: buildFormats(publishedInRange.length ? publishedInRange : db.posts.filter((post) => post.status === 'published')),
+    formats: buildFormats(publishedInRange.length ? publishedInRange : posts.filter((post) => post.status === 'published')),
   };
 }

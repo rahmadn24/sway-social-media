@@ -23,7 +23,9 @@ The app runs locally as a full-stack Next.js project. It needs no platform crede
 - **React 19** and **TypeScript**
 - **lucide-react** icons and **date-fns**
 - A hand-built CSS design system in `app/globals.css`
-- JSON persistence in `data/store.json` — no external database required
+- **Postgres + Prisma** — every piece of structured data (users, AI keys
+  encrypted at rest, accounts, posts, conversations, notifications,
+  analytics) lives in Postgres; see `prisma/schema.prisma`. No JSON store.
 - Bring-your-own-key AI: Anthropic, OpenAI, Google, Groq, OpenRouter, DeepSeek, Ollama or any OpenAI-compatible endpoint (falls back to a labeled demo writer when no key is present)
 - A background scheduler started through `instrumentation.ts`
 
@@ -46,7 +48,9 @@ npm run build
 npm start
 ```
 
-On first start, Sway seeds a local workspace in `data/store.json` and downloads nothing at runtime — the demo images and avatars live in `public/`.
+On first start, Sway applies pending Prisma migrations and seeds the demo
+workspace (and the demo + admin users) into Postgres, then downloads
+nothing at runtime — the demo images and avatars live in `public/`.
 
 ## Environment variables
 
@@ -58,10 +62,19 @@ cp .env.example .env.local
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
+| `DATABASE_URL` | Yes | Postgres connection string, e.g. `postgresql://sway:…@localhost:5432/sway`. |
+| `SWAY_SESSION_SECRET` | Yes (production) | Secret that signs session cookies. Generate one with `openssl rand -hex 32`. Production refuses to start without it; development uses a random per-boot secret and warns. |
+| `SWAY_ENCRYPTION_KEY` | Yes (production) | 64 hex chars (32 bytes, `openssl rand -hex 32`) for AES-256-GCM encryption of per-user AI keys at rest. Production refuses to start without it. Losing it makes stored AI keys unreadable. |
+| `SWAY_ADMIN_EMAIL` / `SWAY_ADMIN_PASSWORD` | No | Seed-only: when both are set, the seed creates/updates the admin user (scrypt-hashed, never stored in plaintext). The demo user is created by the seed with a random password nobody knows. |
 | `AI_PROVIDER` | No | Active provider: `anthropic`, `openai`, `gemini`, `groq`, `openrouter`, `deepseek`, `ollama` or `custom`. Defaults to `anthropic`. |
 | `AI_API_KEY` | No | Generic key for the active provider. Each provider also honors its own variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `DEEPSEEK_API_KEY`, `OLLAMA_API_KEY`, `CUSTOM_AI_API_KEY`). |
 | `AI_MODEL` / `AI_BASE_URL` | No | Override the model or endpoint (needed for `custom`). Per-provider defaults are built in. |
 | `SOCIAL_PUBLISHING_MODE` | No | `sandbox` (default) or `live`. In `live`, publishing calls the adapters registered in `lib/publishing.ts` and fails loudly for platforms that have none — it never falls back to the sandbox. |
+
+Sign-in: the app has two accounts sharing one workspace. The demo account is
+entered with the **"Try the demo"** button on the login page (no password is
+shown or needed); the admin account is the one seeded above. Sessions last
+7 days.
 
 Keys are validated against the provider before they are stored, and are never sent back to the browser.
 
@@ -71,7 +84,7 @@ If no key is present, Sway uses a high-quality demo writer and labels every gene
 
 There are two supported paths:
 
-1. **Through the UI** — go to **Connections → Connect AI** and paste your provider key. Sway validates the key, stores it server-side in `data/ai.json` with local-only file permissions, and never sends the key back to the browser. (A legacy `data/claude.json` from earlier builds is migrated on first read and deleted.)
+1. **Through the UI** — go to **Connections → Connect AI** and paste your provider key. Sway validates the key, stores it encrypted per user in Postgres (AES-256-GCM, `SWAY_ENCRYPTION_KEY`), and never sends the key back to the browser.
 2. **Through the environment** — set `AI_PROVIDER` and the matching key variable in `.env.local`. In this mode the key is managed by the environment and the UI only lets you choose the model.
 
 The active provider powers:
@@ -83,7 +96,7 @@ The active provider powers:
 
 Sway currently ships with a **sandbox publishing transport** in `lib/publishing.ts`. It validates a post (caption, selected channels, required media for Instagram/TikTok), simulates platform results, and lets the full scheduling and auto-publish loop be tested safely. No content is sent to a social network.
 
-The scheduler runs every 20 seconds and publishes due posts where `autoPublish` is enabled. Results are written back to `data/store.json` and surfaced in notifications and the content library.
+The scheduler runs every 20 seconds and publishes due posts where `autoPublish` is enabled. Results are written back to Postgres and surfaced in notifications and the content library.
 
 To add real publishing:
 
@@ -98,19 +111,26 @@ The API routes, composer, calendar, scheduler and UI do not need to change.
 
 ## Data and reset
 
-- Workspace data: `data/store.json`
-- AI provider credentials: `data/ai.json` (created only after you connect a key)
+- Workspace data (accounts, posts, conversations, notifications,
+  analytics): Postgres, schema in `prisma/schema.prisma`
+- Users + AI provider credentials (encrypted per user): Postgres
 - Uploaded media: `public/uploads/`
 
-Both `data/` and `public/uploads/` are gitignored. To return to the seeded demo workspace, stop the server, delete `data/store.json` (and `data/ai.json` if you want to disconnect your provider), then start it again.
+`public/uploads/` is gitignored. To return to the seeded demo workspace,
+call **POST /api/auth/reset** while signed in (or run `npx prisma db seed`
+after truncating the content tables) — it truncates the workspace content
+tables and re-seeds the demo content. Users and their AI settings are
+never touched by a reset.
 
-The app is intentionally single-workspace and file-backed. It is designed as a complete local product demo, not a multi-tenant production deployment.
+The app is intentionally single-workspace. It is designed as a complete
+local product demo, not a multi-tenant production deployment.
 
 ## Project structure
 
 ```text
 app/
   page.tsx                 Overview
+  login/                   Sign-in page (demo + admin accounts)
   studio/                  Claude Studio
   composer/                Post composer
   content/                 Content library
@@ -128,12 +148,17 @@ components/
   ToastProvider.tsx        Toast system
 lib/
   seed.ts                  Seeded demo workspace
-  store.ts                 JSON persistence
+  prisma.ts                Prisma client singleton (Postgres)
+  db.ts                    Serializers, loaders, seed/reset, post writers
+  crypto.ts                AES-256-GCM encryption for per-user AI keys
+  passwords.ts             scrypt password hashing
+  credentials.ts           DB-backed credential verification + demo lookup
+  auth.ts                  Session tokens, rate limit, session secret
   publishing.ts            Publishing boundary / mode switch / adapters
   scheduler.ts             Auto-publish loop
   ai.ts                    Prompts, demo fallback, reply suggestions
   ai-providers.ts          Provider registry (Anthropic, OpenAI, Gemini, …)
-  ai-settings.ts           Key validation and local storage (data/ai.json)
+  ai-settings.ts           Per-user AI settings, encrypted in Postgres
   accounts.ts              Account helpers
   platforms.ts             Platform metadata and limits
   analytics.ts             Analytics aggregation
@@ -141,7 +166,10 @@ lib/
   client.ts                Shared fetch helpers and refresh events
   format.ts                Number/date formatting
   types.ts                 Shared models
-data/                      Local JSON data (gitignored)
+prisma/
+  schema.prisma            Postgres schema (all entities)
+  seed.ts                  Demo user + admin (seed-only env) + workspace
+  migrations/              Migration history (applied by `migrate deploy`)
 public/                    Images, avatars, uploads
 ```
 
@@ -162,6 +190,10 @@ public/                    Images, avatars, uploads
 | `PATCH` | `/api/connections/[id]` | Connect, disconnect, refresh or set primary |
 | `DELETE` | `/api/connections/[id]` | Remove an account (reassigns related content) |
 | `POST` | `/api/ai/generate` | Generate social drafts |
+| `POST` | `/api/auth/login` | Sign in (sets the session cookie) |
+| `POST` | `/api/auth/logout` | Sign out (clears the session cookie) |
+| `GET` | `/api/auth/me` | Current signed-in user |
+| `POST` | `/api/auth/reset` | Reset the demo workspace (re-seeds on next read) |
 | `POST` | `/api/ai/reply` | Suggest an inbox reply |
 | `GET/PUT/DELETE` | `/api/ai/settings` | AI provider connection and model |
 | `POST` | `/api/upload` | Upload media |
