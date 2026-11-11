@@ -11,15 +11,25 @@ import {
   saveAiSettings,
   validateAiProvider,
 } from '@/lib/ai-settings';
+import { getAuthenticatedUser } from '@/lib/session';
 import type { AiProviderId } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  return NextResponse.json(getAiStatus());
+export async function GET(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+  return NextResponse.json(await getAiStatus(user.id));
 }
 
 export async function PUT(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let body: {
     provider?: string;
     apiKey?: string;
@@ -32,7 +42,7 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
-  const status = getAiStatus();
+  const status = await getAiStatus(user.id);
   const provider: AiProviderId = isAiProvider(body.provider) ? body.provider : status.provider;
 
   if (status.providerLocked && provider !== status.provider) {
@@ -80,10 +90,14 @@ export async function PUT(request: NextRequest) {
   }
 
   if (apiKey || requestedBaseUrl !== undefined) {
-    const validation = await validateAiProvider(provider, {
-      apiKey,
-      baseUrl,
-    });
+    const validation = await validateAiProvider(
+      provider,
+      {
+        apiKey,
+        baseUrl,
+      },
+      user.id,
+    );
     if (!validation.ok) {
       return NextResponse.json(
         { error: `We couldn’t connect to ${meta.name}.`, detail: validation.detail },
@@ -93,7 +107,7 @@ export async function PUT(request: NextRequest) {
   }
 
   return NextResponse.json(
-    saveAiSettings({
+    await saveAiSettings(user.id, {
       provider,
       apiKey,
       model: model || providerStatus?.model,
@@ -103,11 +117,15 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
   const requested = request.nextUrl.searchParams.get('provider');
   if (requested && !isAiProvider(requested)) {
     return NextResponse.json({ error: 'Unknown AI provider.' }, { status: 400 });
   }
-  const status = getAiStatus();
+  const status = await getAiStatus(user.id);
   if (status.providerLocked && requested && requested !== status.provider) {
     return NextResponse.json(
       { error: 'The AI provider is managed by AI_PROVIDER in the environment.' },
@@ -115,6 +133,9 @@ export async function DELETE(request: NextRequest) {
     );
   }
   return NextResponse.json(
-    clearAiSettings(requested && isAiProvider(requested) ? requested : undefined),
+    await clearAiSettings(
+      user.id,
+      requested && isAiProvider(requested) ? requested : undefined,
+    ),
   );
 }
