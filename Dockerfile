@@ -20,6 +20,13 @@ COPY . .
 # Generate the Prisma client before the Next.js build bundles it.
 # (No DATABASE_URL is needed for generate.)
 RUN npx prisma generate
+# Next.js imports every route module at build time to collect page data,
+# and lib/prisma.ts throws when DATABASE_URL is unset — while .dockerignore
+# keeps the real .env out of the build. Give the builder a dummy value:
+# page-data collection only imports modules, it never connects, and the
+# runner stage gets the real URL from the VPS .env at runtime.
+ARG DATABASE_URL=postgresql://build:build@localhost:5432/build
+ENV DATABASE_URL=$DATABASE_URL
 RUN npm run build
 
 FROM node:24-alpine AS runner
