@@ -1,0 +1,174 @@
+// Sway — Social Studio. All structured data lives here (Postgres).
+// No JSON file store, no hardcoded credentials: users, AI keys (encrypted),
+// accounts, posts, conversations, notifications and analytics are rows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: the connection URL lives in prisma.config.ts (used by
+  // Migrate); the runtime client connects via the pg driver adapter.
+}
+
+model User {
+  id               String      @id @default(uuid())
+  email            String      @unique
+  passwordHash     String
+  role             String // 'demo' | 'admin'
+  name             String?
+  activeAiProvider String      @default("anthropic")
+  aiSettings       AiSetting[]
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model AiSetting {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider         String
+  encryptedApiKey  String?
+  model            String?
+  baseUrl          String?
+  connectedAt      DateTime?
+  updatedAt        DateTime @updatedAt
+
+  @@unique([userId, provider])
+}
+
+model Account {
+  id             String   @id
+  platform       String
+  connected      Boolean  @default(true)
+  handle         String
+  displayName    String
+  followers      Int      @default(0)
+  followerChange Float    @default(0)
+  engagementRate Float    @default(0)
+  reach30d       Int      @default(0)
+  health         String   @default("healthy")
+  lastSyncedAt   DateTime @default(now())
+  scopes         String[]
+  isPrimary      Boolean  @default(false)
+  sortOrder      Int      @default(0)
+
+  postAccounts   PostAccount[]
+  conversations  Conversation[]
+  notifications  AppNotification[]
+}
+
+model Post {
+  id           String   @id
+  title        String?
+  caption      String
+  platforms    String[]
+  status       String
+  scheduledAt  DateTime?
+  publishedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  autoPublish  Boolean  @default(true)
+  impressions  Int      @default(0)
+  likes        Int      @default(0)
+  comments     Int      @default(0)
+  shares       Int      @default(0)
+  saves        Int      @default(0)
+  tags         String[]
+  aiGenerated  Boolean  @default(false)
+
+  media        MediaAsset[]
+  postAccounts PostAccount[]
+  overrides    PostOverride[]
+  conversations Conversation[]
+}
+
+model MediaAsset {
+  id        String @id @default(uuid())
+  postId    String
+  post      Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  url       String
+  type      String // 'image' | 'video'
+  alt       String?
+  sortOrder Int    @default(0)
+}
+
+model PostAccount {
+  postId    String
+  post      Post    @relation(fields: [postId], references: [id], onDelete: Cascade)
+  accountId String
+  account   Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@id([postId, accountId])
+}
+
+model PostOverride {
+  postId   String
+  post     Post   @relation(fields: [postId], references: [id], onDelete: Cascade)
+  platform String
+  text     String
+
+  @@id([postId, platform])
+}
+
+model Conversation {
+  id               String   @id
+  type             String // 'dm' | 'comment'
+  platform         String
+  accountId        String?
+  account          Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  participantName  String
+  participantHandle String
+  participantAvatar String?
+  subject          String?
+  preview          String
+  unread           Boolean  @default(false)
+  starred          Boolean  @default(false)
+  status           String   @default("open")
+  lastMessageAt    DateTime @default(now())
+  postId           String?
+  post             Post?    @relation(fields: [postId], references: [id], onDelete: SetNull)
+
+  messages ConversationMessage[]
+}
+
+model ConversationMessage {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  from           String // 'them' | 'me'
+  text           String
+  createdAt      DateTime     @default(now())
+}
+
+model AppNotification {
+  id        String   @id @default(uuid())
+  type      String // 'engagement' | 'system' | 'mention' | 'post'
+  title     String
+  body      String
+  createdAt DateTime @default(now())
+  read      Boolean  @default(false)
+  platform  String?
+  accountId String?
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+}
+
+model AnalyticsPoint {
+  id         Int    @id @default(autoincrement())
+  date       String @unique // 'YYYY-MM-DD'
+  reach      Int
+  engagement Int
+  followers  Int
+}
+
+// Server-side session revocations: logout inserts the sha256 of the token
+// here, so a logged-out token stops working even though sessions are
+// stateless HMAC tokens. Rows are pruned once they expire.
+model RevokedSession {
+  tokenHash String   @id
+  revokedAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
