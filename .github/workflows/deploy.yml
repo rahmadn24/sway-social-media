@@ -26,5 +26,6 @@ jobs:
             cd /opt/ryahmadn/sway
             git pull --ff-only origin production
             docker compose up -d --build
-            sleep 5
+            for i in $(seq 1 12); do curl -fsS -o /dev/null http://localhost:3100/ && break || sleep 5; done
             curl -fsS -o /dev/null http://localhost:3100/ && echo "Sway is up on :3100"
+
