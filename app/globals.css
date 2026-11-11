@@ -9756,3 +9756,437 @@ textarea.input,
 .sidebar-account-actions button:disabled {
   opacity: 0.6;
 }
+
+/* ---------------- UI fixes 2026-11-11 ----------------
+   Classes the migration-era pages use that never had styles:
+   provider picker (AI modal), composer account picker, connection
+   card actions, inbox filters. Without these, buttons render
+   unstyled and grids overlap / clip. */
+
+/* --- Inbox: filters must wrap instead of clipping the selects --- */
+.inbox-filters {
+  flex-wrap: wrap;
+}
+
+.inbox-filter-tabs {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.inbox-filter-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.inbox-platform-filter {
+  flex: 1 1 110px;
+  min-width: 88px;
+  width: auto;
+}
+
+/* --- Composer: Publish-to account picker --- */
+.account-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.account-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.account-group-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.account-group-title small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.account-group-toggle {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+  color: var(--ink-soft);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.account-group-toggle:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.account-choice-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.account-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px 10px;
+  text-align: left;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.account-choice:hover {
+  border-color: var(--line-strong);
+}
+
+.account-choice-selected {
+  background: #f5f8eb;
+  border-color: #9daf8a;
+  box-shadow: 0 0 0 3px rgba(80, 115, 80, 0.07);
+}
+
+.account-choice-disabled {
+  opacity: 0.55;
+}
+
+.account-choice-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.account-choice-copy strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-choice-copy small {
+  color: var(--muted);
+  font-size: 8.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-primary-tag {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: #5b6d3d;
+  background: #eef3df;
+  border-radius: 4px;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Per-channel caption overrides (composer) */
+.override-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 11px;
+  background: #fbfaf6;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+/* --- Connections: card action row must wrap; style the unstyled buttons --- */
+.connection-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 5px;
+}
+
+.connection-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 27px;
+  padding: 0 8px;
+  color: var(--ink-soft);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 7.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.connection-primary:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.connection-primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.connection-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  color: #9b8179;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.connection-remove:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.connection-remove:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.connection-primary-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+  padding: 0 6px;
+  margin-left: 6px;
+  color: #5b6d3d;
+  background: #eef3df;
+  border-radius: 99px;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+/* Platform sections + empty state (connections) */
+.connection-platform-list {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.connection-platform-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.connection-platform-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.connection-platform-title h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.connection-platform-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+/* Add-account modal: platform picker */
+.account-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.platform-pick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.platform-pick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  color: var(--ink-soft);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.platform-pick:hover {
+  border-color: var(--line-strong);
+}
+
+.platform-pick.is-active {
+  color: var(--ink);
+  background: #f5f8eb;
+  border-color: #9daf8a;
+  box-shadow: 0 0 0 3px rgba(80, 115, 80, 0.07);
+}
+
+/* --- AI provider modal: picker grid + form grid --- */
+.provider-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.provider-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 11px;
+  text-align: left;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.provider-choice:hover {
+  border-color: var(--line-strong);
+}
+
+.provider-choice.is-active {
+  background: #f5f8eb;
+  border-color: #9daf8a;
+  box-shadow: 0 0 0 3px rgba(80, 115, 80, 0.07);
+}
+
+.provider-choice.is-locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.provider-choice-mark {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.provider-choice-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.provider-choice-copy strong {
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 750;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-choice-copy small {
+  color: var(--muted);
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-choice-check {
+  flex: 0 0 auto;
+  color: #5b6d3d;
+}
+
+.provider-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.ai-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .account-choice-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .platform-pick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .provider-picker,
+  .ai-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
