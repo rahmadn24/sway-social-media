@@ -375,12 +375,13 @@ async function generateWithOpenAiCompatible(
 
 export async function generateSocialContent(
   input: AiGenerationInput,
+  userId: string,
 ): Promise<AiGenerationResult> {
   if (!input.topic?.trim()) {
     throw new AiRequestError('Add a topic or idea first.', 400);
   }
 
-  const config = getActiveAiConfig();
+  const config = await getActiveAiConfig(userId);
   if (!config.connected) return demoGeneration(input);
 
   if (config.provider === 'anthropic') {
@@ -490,13 +491,16 @@ function demoReply(conversation: Conversation): string {
     : `Thank you so much, ${firstName} — this is such a lovely note. I’m so glad it resonated. More of this is coming soon!`;
 }
 
-export async function suggestReply(conversation: Conversation): Promise<{
+export async function suggestReply(
+  conversation: Conversation,
+  userId: string,
+): Promise<{
   suggestion: string;
   provider: AiProviderId | 'demo';
   providerName: string;
   model?: string;
 }> {
-  const config = getActiveAiConfig();
+  const config = await getActiveAiConfig(userId);
   const firstName = conversation.participant.name.split(' ')[0];
   const transcript = conversation.messages
     .slice(-5)

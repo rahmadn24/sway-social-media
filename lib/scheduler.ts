@@ -1,5 +1,6 @@
+import { getAccounts, getPosts, serializePost } from './db';
+import { prisma } from './prisma';
 import { publishPostToAccounts } from './publishing';
-import { readDb, writeDb } from './store';
 import type { Post } from './types';
 
 const globalForScheduler = globalThis as unknown as {
@@ -12,9 +13,9 @@ export async function publishDuePosts(): Promise<Post[]> {
   globalForScheduler.__swaySchedulerRunning = true;
 
   try {
-    const db = readDb();
+    const [posts, accounts] = await Promise.all([getPosts(), getAccounts()]);
     const now = Date.now();
-    const due = db.posts.filter(
+    const due = posts.filter(
       (post) =>
         post.status === 'scheduled' &&
         post.autoPublish &&
@@ -26,51 +27,63 @@ export async function publishDuePosts(): Promise<Post[]> {
 
     const published: Post[] = [];
     for (const post of due) {
-      const results = await publishPostToAccounts(post, db.accounts);
+      const results = await publishPostToAccounts(post, accounts);
       const successes = results.filter((result) => result.ok);
       const failures = results.filter((result) => !result.ok);
+      const stamp = new Date().toISOString();
 
       if (successes.length === 0) {
-        post.status = 'failed';
-        post.updatedAt = new Date().toISOString();
-        db.notifications.unshift({
-          id: crypto.randomUUID(),
-          type: 'system',
-          title: 'Auto-publish needs your attention',
-          body: failures[0]?.error ?? `“${post.title || post.caption.slice(0, 48)}” could not be published.`,
-          createdAt: new Date().toISOString(),
-          read: false,
+        await prisma.post.update({
+          where: { id: post.id },
+          data: { status: 'failed', updatedAt: new Date(stamp) },
+        });
+        await prisma.appNotification.create({
+          data: {
+            id: crypto.randomUUID(),
+            type: 'system',
+            title: 'Auto-publish needs your attention',
+            body:
+              failures[0]?.error ??
+              `“${post.title || post.caption.slice(0, 48)}” could not be published.`,
+            createdAt: new Date(stamp),
+            read: false,
+          },
         });
         continue;
       }
 
-      post.status = 'published';
-      post.publishedAt = new Date().toISOString();
-      post.updatedAt = post.publishedAt;
-      published.push(post);
-      db.notifications.unshift({
-        id: crypto.randomUUID(),
-        type: 'post',
-        title: 'Scheduled post published',
-        body: `“${post.title || post.caption.slice(0, 52)}” is now live on ${successes.length} account${successes.length === 1 ? '' : 's'}: ${successes.map((result) => result.accountLabel).join(', ')}.`,
-        createdAt: post.publishedAt,
-        read: false,
+      const updated = await prisma.post.update({
+        where: { id: post.id },
+        data: { status: 'published', publishedAt: new Date(stamp), updatedAt: new Date(stamp) },
+        include: { media: true, postAccounts: true, overrides: true },
+      });
+      published.push(serializePost(updated));
+      await prisma.appNotification.create({
+        data: {
+          id: crypto.randomUUID(),
+          type: 'post',
+          title: 'Scheduled post published',
+          body: `“${post.title || post.caption.slice(0, 52)}” is now live on ${successes.length} account${successes.length === 1 ? '' : 's'}: ${successes.map((result) => result.accountLabel).join(', ')}.`,
+          createdAt: new Date(stamp),
+          read: false,
+        },
       });
       if (failures.length > 0) {
-        db.notifications.unshift({
-          id: crypto.randomUUID(),
-          type: 'system',
-          title: 'Some accounts could not publish',
-          body: failures
-            .map((result) => `${result.accountLabel}: ${result.error}`)
-            .join(' · '),
-          createdAt: post.publishedAt,
-          read: false,
+        await prisma.appNotification.create({
+          data: {
+            id: crypto.randomUUID(),
+            type: 'system',
+            title: 'Some accounts could not publish',
+            body: failures
+              .map((result) => `${result.accountLabel}: ${result.error}`)
+              .join(' · '),
+            createdAt: new Date(stamp),
+            read: false,
+          },
         });
       }
     }
 
-    writeDb(db);
     return published;
   } finally {
     globalForScheduler.__swaySchedulerRunning = false;

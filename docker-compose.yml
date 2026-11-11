@@ -1,8 +1,11 @@
 # Sway on the VPS: https://sway.ryahmadn.my.id
 # First-time setup and every later step are in DEPLOY.md.
-# Data survives rebuilds: workspace JSON in ./data, uploads in ./public/uploads.
-# Caddy reaches Sway as sway:3000 on the shared vps-setup_default network
-# (Caddy runs in Docker too, so localhost:3100 would point at Caddy itself).
+# All structured data lives in Postgres (a `sway` database inside the
+# Postgres that already runs for n8n — no new database service here).
+# Only uploads stay on disk, in ./public/uploads (volume, so a rebuild
+# never deletes them). Caddy reaches Sway as sway:3000 on the shared
+# vps-setup_default network (Caddy runs in Docker too, so localhost:3100
+# would point at Caddy itself).
 
 services:
   sway:
@@ -11,17 +14,21 @@ services:
     restart: unless-stopped
     ports:
       - "3100:3000"
-    # .env is optional: without it Sway runs with the labeled demo writer.
-    # With AI_PROVIDER + a key it uses the real provider (see DEPLOY.md).
+    # .env is required: it carries DATABASE_URL, the two server secrets
+    # and the seed-only admin credentials (see .env.example / DEPLOY.md).
     env_file:
       - path: .env
-        required: false
+        required: true
     environment:
       - NODE_ENV=production
       - PORT=3000
       - SOCIAL_PUBLISHING_MODE=${SOCIAL_PUBLISHING_MODE:-sandbox}
+      # Explicit so a missing value fails loudly at startup instead of
+      # silently falling back to defaults (Compose reads these from .env).
+      - DATABASE_URL=${DATABASE_URL}
+      - SWAY_SESSION_SECRET=${SWAY_SESSION_SECRET}
+      - SWAY_ENCRYPTION_KEY=${SWAY_ENCRYPTION_KEY}
     volumes:
-      - ./data:/app/data
       - ./public/uploads:/app/public/uploads
     networks:
       - vps-setup_default

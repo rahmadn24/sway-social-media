@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUser } from '@/lib/session';
 import type { MediaAsset, Platform, Post, PostStatus } from '@/lib/types';
 import { platformsForAccountIds, resolveAccountIds } from '@/lib/accounts';
+import { addNotification, createPostRecord, getAccounts, getPosts } from '@/lib/db';
 import { publishPostToAccounts } from '@/lib/publishing';
-import { readDb, writeDb } from '@/lib/store';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,7 +33,12 @@ function countsFor(posts: Post[]) {
 }
 
 export async function GET(request: NextRequest) {
-  const db = readDb();
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
+  const allPosts = await getPosts();
   const params = request.nextUrl.searchParams;
   const status = params.get('status');
   const platform = params.get('platform');
@@ -40,7 +46,7 @@ export async function GET(request: NextRequest) {
   const query = params.get('q')?.trim().toLowerCase();
   const sort = params.get('sort') ?? 'updated';
 
-  let posts = [...db.posts];
+  let posts = [...allPosts];
 
   if (status && status !== 'all' && STATUSES.includes(status as PostStatus)) {
     posts = posts.filter((post) => post.status === status);
@@ -73,12 +79,17 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     posts,
-    counts: countsFor(db.posts),
+    counts: countsFor(allPosts),
     total: posts.length,
   });
 }
 
 export async function POST(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
@@ -86,14 +97,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Send a valid JSON body.' }, { status: 400 });
   }
 
-  const db = readDb();
+  const accounts = await getAccounts();
   const caption = typeof body.caption === 'string' ? body.caption.trim() : '';
   const title = typeof body.title === 'string' ? body.title.trim() : '';
-  const accountIds = resolveAccountIds(db.accounts, {
+  const accountIds = resolveAccountIds(accounts, {
     accountIds: body.accountIds,
     platforms: body.platforms,
   });
-  const platforms = platformsForAccountIds(db.accounts, accountIds);
+  const platforms = platformsForAccountIds(accounts, accountIds);
   const media = parseMedia(body.media);
   const status = (body.status as PostStatus) || 'draft';
   const autoPublish = body.autoPublish !== false;
@@ -130,7 +141,7 @@ export async function POST(request: NextRequest) {
   if (status === 'scheduled' && new Date(scheduledAt as string).getTime() < Date.now() - 60_000) {
     return NextResponse.json({ error: 'The scheduled time is in the past.' }, { status: 400 });
   }
-  const selectedAccounts = db.accounts.filter((account) => accountIds.includes(account.id));
+  const selectedAccounts = accounts.filter((account) => accountIds.includes(account.id));
   const disconnected = selectedAccounts.filter((account) => !account.connected);
   if (status !== 'draft' && disconnected.length > 0) {
     return NextResponse.json(
@@ -174,7 +185,7 @@ export async function POST(request: NextRequest) {
   };
 
   if (status === 'published') {
-    const results = await publishPostToAccounts(post, db.accounts);
+    const results = await publishPostToAccounts(post, accounts);
     if (!results.some((result) => result.ok)) {
       return NextResponse.json(
         { error: results[0]?.error ?? 'Could not publish this post.' },
@@ -182,28 +193,21 @@ export async function POST(request: NextRequest) {
       );
     }
     const successes = results.filter((result) => result.ok);
-    db.notifications.unshift({
-      id: crypto.randomUUID(),
+    await addNotification({
       type: 'post',
       title: 'Post published',
       body: `“${post.title}” is now live on ${successes.length} account${successes.length === 1 ? '' : 's'}: ${successes.map((result) => result.accountLabel).join(', ')}.`,
-      createdAt: now,
-      read: false,
     });
     if (successes.length < results.length) {
       const failures = results.filter((result) => !result.ok);
-      db.notifications.unshift({
-        id: crypto.randomUUID(),
+      await addNotification({
         type: 'post',
         title: 'Some accounts could not publish',
         body: failures.map((result) => `${result.accountLabel}: ${result.error}`).join(' · '),
-        createdAt: now,
-        read: false,
       });
     }
   }
 
-  db.posts.unshift(post);
-  writeDb(db);
-  return NextResponse.json({ post }, { status: 201 });
+  const created = await createPostRecord(post);
+  return NextResponse.json({ post: created }, { status: 201 });
 }
