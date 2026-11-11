@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAuthenticatedUser } from '@/lib/session';
 import { getPublishingMode } from '@/lib/publishing';
-import { readDb, writeDb } from '@/lib/store';
+import { getAccounts, serializeAccount } from '@/lib/db';
+import { prisma } from '@/lib/prisma';
 import { PLATFORMS } from '@/lib/types';
-import type { Account, Platform } from '@/lib/types';
+import type { Platform } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,15 +16,25 @@ const DEFAULT_SCOPES: Record<Platform, string[]> = {
   facebook: ['pages', 'comments', 'messages', 'insights'],
 };
 
-export async function GET() {
-  const db = readDb();
+export async function GET(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
+  const accounts = await getAccounts();
   return NextResponse.json({
-    accounts: db.accounts,
+    accounts,
     publishingMode: getPublishingMode(),
   });
 }
 
 export async function POST(request: NextRequest) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized. Sign in to continue.' }, { status: 401 });
+  }
+
   let body: {
     platform?: string;
     handle?: string;
@@ -46,12 +58,9 @@ export async function POST(request: NextRequest) {
   const normalizedHandle = handle.startsWith('@') ? handle : `@${handle}`;
   const displayName = body.displayName?.trim() || normalizedHandle.replace(/^@/, '');
 
-  const db = readDb();
-  const duplicate = db.accounts.find(
-    (account) =>
-      account.platform === platform &&
-      account.handle.toLowerCase() === normalizedHandle.toLowerCase(),
-  );
+  const duplicate = await prisma.account.findFirst({
+    where: { platform, handle: { equals: normalizedHandle, mode: 'insensitive' } },
+  });
   if (duplicate) {
     return NextResponse.json(
       { error: `${normalizedHandle} is already connected on ${platform}.` },
@@ -59,22 +68,23 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const account: Account = {
-    id: `acct_${platform}_${crypto.randomUUID().slice(0, 6)}`,
-    platform,
-    connected: true,
-    handle: normalizedHandle,
-    displayName,
-    followers: Math.max(0, Math.round(body.followers ?? 0)),
-    followerChange: 0,
-    engagementRate: 0,
-    reach30d: 0,
-    health: 'healthy',
-    lastSyncedAt: new Date().toISOString(),
-    scopes: DEFAULT_SCOPES[platform],
-  };
-
-  db.accounts.push(account);
-  writeDb(db);
-  return NextResponse.json({ account }, { status: 201 });
+  const maxSort = await prisma.account.aggregate({ _max: { sortOrder: true } });
+  const created = await prisma.account.create({
+    data: {
+      id: `acct_${platform}_${crypto.randomUUID().slice(0, 6)}`,
+      platform,
+      connected: true,
+      handle: normalizedHandle,
+      displayName,
+      followers: Math.max(0, Math.round(body.followers ?? 0)),
+      followerChange: 0,
+      engagementRate: 0,
+      reach30d: 0,
+      health: 'healthy',
+      lastSyncedAt: new Date(),
+      scopes: DEFAULT_SCOPES[platform],
+      sortOrder: (maxSort._max.sortOrder ?? -1) + 1,
+    },
+  });
+  return NextResponse.json({ account: serializeAccount(created) }, { status: 201 });
 }
